@@ -6,17 +6,19 @@
     <key>Label</key>
     <string>com.remodex.relay</string>
 
-    <key>WorkingDirectory</key>
-    <string>/Users/maneesh/Developer/personal-project/remodex-local/remodex/relay</string>
-
     <key>ProgramArguments</key>
     <array>
-      <string>/opt/homebrew/bin/node</string>
-      <string>/Users/maneesh/Developer/personal-project/remodex-local/remodex/relay/server.js</string>
+      <string>/bin/zsh</string>
+      <string>-lc</string>
+      <string>if [[ -z "$REMODEX_RELAY_DIR" ]]; then echo "REMODEX_RELAY_DIR must be set to the absolute remodex/relay directory" &gt;&amp;2; exit 78; fi; cd "$REMODEX_RELAY_DIR" &amp;&amp; exec node server.js</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+      <key>REMODEX_RELAY_DIR</key>
+      <string>__REMODEX_RELAY_DIR__</string>
       <key>RELAY_BIND_HOST</key>
       <string>0.0.0.0</string>
       <key>PORT</key>

@@ -69,16 +69,15 @@ codex login
 
 ## Variables
 
-Pick a stable workspace directory. This example uses:
+Run these commands from the root of the cloned setup repo, meaning the directory that contains this `spec.md` file. The setup repo can be cloned anywhere.
 
 ```sh
-export REMODEX_WORKSPACE="$HOME/Developer/personal-project/remodex-local"
-export REMODEX_SOURCE_DIR="$REMODEX_WORKSPACE/remodex"
+export REMODEX_SETUP_DIR="$(pwd -P)"
+export REMODEX_SOURCE_DIR="$REMODEX_SETUP_DIR/remodex"
 export REMODEX_RELAY_DIR="$REMODEX_SOURCE_DIR/relay"
 export REMODEX_RELAY_PORT="9000"
 export REMODEX_TAILSCALE_IP="$(tailscale ip -4)"
 export REMODEX_RELAY="ws://${REMODEX_TAILSCALE_IP}:${REMODEX_RELAY_PORT}/relay"
-export NODE_PATH_ABS="$(which node)"
 ```
 
 For convenience, add the bridge relay URL to `~/.zshrc` after confirming the IP:
@@ -107,9 +106,8 @@ Expected: `remodex --version` prints a version.
 ## Clone and Prepare the Relay
 
 ```sh
-mkdir -p "$REMODEX_WORKSPACE"
-cd "$REMODEX_WORKSPACE"
-git clone https://github.com/Emanuele-web04/remodex.git remodex
+cd "$REMODEX_SETUP_DIR"
+git clone https://github.com/Emanuele-web04/remodex.git "$REMODEX_SOURCE_DIR"
 cd "$REMODEX_RELAY_DIR"
 npm install
 ```
@@ -149,25 +147,20 @@ Stop the foreground relay with `Ctrl-C`.
 
 ## Install the Relay LaunchAgent
 
-Create a local copy first:
-
-```sh
-mkdir -p "$REMODEX_WORKSPACE/launchd"
-```
-
-Write this file to:
+The reusable LaunchAgent template lives at:
 
 ```text
-$REMODEX_WORKSPACE/launchd/com.remodex.relay.plist
+$REMODEX_SETUP_DIR/launchd/com.remodex.relay.plist
 ```
 
-Replace:
+It is generic across common Mac setups:
 
-- `__NODE_PATH_ABS__` with the output of `which node`.
-- `__REMODEX_RELAY_DIR__` with the absolute path to `remodex/relay`.
-- `__REMODEX_RELAY_SERVER__` with the absolute path to `remodex/relay/server.js`.
+- It does not contain a hardcoded username.
+- It does not contain a hardcoded Homebrew Node path.
+- It contains a `__REMODEX_RELAY_DIR__` placeholder that must be replaced at install time.
+- It includes both Apple Silicon and Intel Homebrew bin directories in `PATH`.
 
-Example for Apple Silicon Homebrew:
+Expected template contents:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -178,17 +171,19 @@ Example for Apple Silicon Homebrew:
     <key>Label</key>
     <string>com.remodex.relay</string>
 
-    <key>WorkingDirectory</key>
-    <string>__REMODEX_RELAY_DIR__</string>
-
     <key>ProgramArguments</key>
     <array>
-      <string>__NODE_PATH_ABS__</string>
-      <string>__REMODEX_RELAY_SERVER__</string>
+      <string>/bin/zsh</string>
+      <string>-lc</string>
+      <string>if [[ -z "$REMODEX_RELAY_DIR" ]]; then echo "REMODEX_RELAY_DIR must be set to the absolute remodex/relay directory" &gt;&amp;2; exit 78; fi; cd "$REMODEX_RELAY_DIR" &amp;&amp; exec node server.js</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+      <key>REMODEX_RELAY_DIR</key>
+      <string>__REMODEX_RELAY_DIR__</string>
       <key>RELAY_BIND_HOST</key>
       <string>0.0.0.0</string>
       <key>PORT</key>
@@ -209,23 +204,29 @@ Example for Apple Silicon Homebrew:
 </plist>
 ```
 
-Do not use `/opt/homebrew/bin/npm start` in the LaunchAgent. In the successful run, that failed because npm uses `#!/usr/bin/env node`, and launchd's default `PATH` does not include Homebrew. Running the absolute `node` path directly against `server.js` is more reliable.
+Do not use `/opt/homebrew/bin/npm start` in the LaunchAgent. In the successful run, that failed because npm uses `#!/usr/bin/env node`, and launchd's default `PATH` does not include Homebrew. The generic plist runs a shell with an explicit Homebrew-aware `PATH`, changes into the actual relay directory, and executes `node server.js`.
 
 Validate and install:
 
 ```sh
-plutil -lint "$REMODEX_WORKSPACE/launchd/com.remodex.relay.plist"
+plutil -lint "$REMODEX_SETUP_DIR/launchd/com.remodex.relay.plist"
 mkdir -p "$HOME/Library/LaunchAgents"
-install -m 644 "$REMODEX_WORKSPACE/launchd/com.remodex.relay.plist" "$HOME/Library/LaunchAgents/com.remodex.relay.plist"
 ```
 
-If an older copy is loaded, unload it first:
+If an older copy is loaded, unload it first. It is okay if this says the service was not loaded:
 
 ```sh
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.remodex.relay.plist"
 ```
 
-It is okay if `bootout` says the service was not loaded.
+Generate the installed plist by replacing the template placeholder with the actual absolute relay path:
+
+```sh
+sed "s#__REMODEX_RELAY_DIR__#${REMODEX_RELAY_DIR}#g" \
+  "$REMODEX_SETUP_DIR/launchd/com.remodex.relay.plist" \
+  > "$HOME/Library/LaunchAgents/com.remodex.relay.plist"
+plutil -lint "$HOME/Library/LaunchAgents/com.remodex.relay.plist"
+```
 
 Load and start:
 
@@ -367,17 +368,30 @@ If logs say:
 env: node: No such file or directory
 ```
 
-then the plist is probably running `npm`, whose shebang depends on `/usr/bin/env node`. Fix the plist to run the absolute Node path directly:
+then the plist is probably running `npm`, whose shebang depends on `/usr/bin/env node`, or it is missing Homebrew from `PATH`. Fix the plist to use the generic shell-based command and include Homebrew paths:
 
 ```xml
 <key>ProgramArguments</key>
 <array>
-  <string>/opt/homebrew/bin/node</string>
-  <string>/absolute/path/to/remodex/relay/server.js</string>
+  <string>/bin/zsh</string>
+  <string>-lc</string>
+  <string>if [[ -z "$REMODEX_RELAY_DIR" ]]; then echo "REMODEX_RELAY_DIR must be set to the absolute remodex/relay directory" &gt;&amp;2; exit 78; fi; cd "$REMODEX_RELAY_DIR" &amp;&amp; exec node server.js</string>
 </array>
+
+<key>EnvironmentVariables</key>
+<dict>
+  <key>PATH</key>
+  <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  <key>REMODEX_RELAY_DIR</key>
+  <string>/absolute/path/to/remodex/relay</string>
+  <key>RELAY_BIND_HOST</key>
+  <string>0.0.0.0</string>
+  <key>PORT</key>
+  <string>9000</string>
+</dict>
 ```
 
-Use `which node` for the real Node path. On Apple Silicon Homebrew this is commonly `/opt/homebrew/bin/node`; on Intel Homebrew it may be `/usr/local/bin/node`.
+The installed plist must contain a real absolute `REMODEX_RELAY_DIR`; the template placeholder must not remain in `~/Library/LaunchAgents/com.remodex.relay.plist`.
 
 ### Local health works but Tailscale health fails
 
